@@ -17,77 +17,89 @@
 #include "pktinfo.h"
 #include "log.h"
 
-
-void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip, int other_headers_length) {
+void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip)
+{
     struct iphdr *iph;
-    
-    iph = (struct iphdr *)(skb->data + other_headers_length);
-    
+
+    iph = (struct iphdr *)(skb->data);
+
     *inner_src_ip = iph->saddr;
     *inner_dst_ip = iph->daddr;
 }
 
-bool downlink(const char *ip) { 
-return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
+bool downlink(const char *ip)
+{
+    return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
 }
 
-void convert_ip_to_string(__be32 ip, char *ip_str) {
-    unsigned char octet1 = (ip >> 24) & 0xFF;
-    unsigned char octet2 = (ip >> 16) & 0xFF;
-    unsigned char octet3 = (ip >> 8) & 0xFF;
-    unsigned char octet4 = ip & 0xFF;
+void convert_ip_to_string(__be32 ip, char *ip_str)
+{
+    unsigned char octet4 = (ip >> 24) & 0xFF;
+    unsigned char octet3 = (ip >> 16) & 0xFF;
+    unsigned char octet2 = (ip >> 8) & 0xFF;
+    unsigned char octet1 = ip & 0xFF;
 
     snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet1, octet2, octet3, octet4);
 }
 
-u8 determine_qfi(const char *src_ip, const char *dst_ip) {
-    if ((strcmp(src_ip, "10.100.200.2") == 0) && (downlink(dst_ip))) {
+u8 determine_qfi(const char *src_ip, const char *dst_ip)
+{
+    if ((strcmp(src_ip, "10.100.200.2") == 0) && (downlink(dst_ip)))
+    {
         return 1;
-    } else if ((strcmp(src_ip, "10.100.200.3") == 0) && (downlink(dst_ip))) {
+    }
+    else if ((strcmp(src_ip, "10.100.200.3") == 0) && (downlink(dst_ip)))
+    {
         return 2;
-    } else {
+    }
+    else
+    {
         return 0;
     }
 }
- 
-u64 network_and_transport_header_len(struct sk_buff *skb) {
+
+u64 network_and_transport_header_len(struct sk_buff *skb)
+{
     u64 hdrlen;
     struct iphdr *iph;
     struct tcphdr *tcp;
-    
+
     iph = (struct iphdr *)skb->data;
     hdrlen = iph->ihl * 4;
 
-    switch (iph->protocol) {
-        case IPPROTO_TCP:
-            // tcp = (struct tcphdr *)(skb_transport_header(skb) + (iph->ihl << 2));
-            skb->len -= iph->ihl * 4;
-            skb->data += iph->ihl * 4;
+    switch (iph->protocol)
+    {
+    case IPPROTO_TCP:
+        // tcp = (struct tcphdr *)(skb_transport_header(skb) + (iph->ihl << 2));
+        skb->len -= iph->ihl * 4;
+        skb->data += iph->ihl * 4;
 
-            tcp =  (struct tcphdr *)skb->data;
-            hdrlen += tcp->doff * 4;
-            break;
-        case IPPROTO_UDP:
-            hdrlen +=  8; // udp header len = 8B
-            break;
-        default:
-            break;
+        tcp = (struct tcphdr *)skb->data;
+        hdrlen += tcp->doff * 4;
+        break;
+    case IPPROTO_UDP:
+        hdrlen += 8; // udp header len = 8B
+        break;
+    default:
+        break;
     }
 
     return hdrlen;
 }
 
-u64 ip4_rm_header(struct sk_buff *skb, unsigned int hdrlen) {
+u64 ip4_rm_header(struct sk_buff *skb, unsigned int hdrlen)
+{
     struct sk_buff *skb_copy, tmp;
     u64 volume;
 
-    // To make sure cacaluting the len of skb will not move the data & len value 
+    // To make sure cacaluting the len of skb will not move the data & len value
     // of the original skb
     tmp = *skb;
     skb_copy = &tmp;
 
     volume = skb->len;
-    if (hdrlen > 0) {
+    if (hdrlen > 0)
+    {
         // packets with gtp header
         volume -= hdrlen;
         skb_copy->len -= hdrlen;
@@ -100,8 +112,8 @@ u64 ip4_rm_header(struct sk_buff *skb, unsigned int hdrlen) {
 }
 
 struct rtable *ip4_find_route(struct sk_buff *skb, struct iphdr *iph,
-    struct sock *sk, struct net_device *gtp_dev, 
-    __be32 saddr, __be32 daddr, struct flowi4 *fl4)
+                              struct sock *sk, struct net_device *gtp_dev,
+                              __be32 saddr, __be32 daddr, struct flowi4 *fl4)
 {
     struct rtable *rt;
     __be16 df;
@@ -115,13 +127,15 @@ struct rtable *ip4_find_route(struct sk_buff *skb, struct iphdr *iph,
     fl4->flowi4_proto = sk->sk_protocol;
 
     rt = ip_route_output_key(dev_net(gtp_dev), fl4);
-    if (IS_ERR(rt)) {
+    if (IS_ERR(rt))
+    {
         GTP5G_ERR(gtp_dev, "no route to %pI4\n", &iph->daddr);
         gtp_dev->stats.tx_carrier_errors++;
         goto err;
     }
 
-    if (rt->dst.dev == gtp_dev) {
+    if (rt->dst.dev == gtp_dev)
+    {
         GTP5G_ERR(gtp_dev, "circular route to %pI4\n", &iph->daddr);
         gtp_dev->stats.collisions++;
         goto err_rt;
@@ -131,28 +145,31 @@ struct rtable *ip4_find_route(struct sk_buff *skb, struct iphdr *iph,
 
     /* This is similar to tnl_update_pmtu(). */
     df = iph->frag_off;
-    if (df) {
+    if (df)
+    {
         mtu = dst_mtu(&rt->dst) - gtp_dev->hard_header_len -
-            sizeof(struct iphdr) - sizeof(struct udphdr);
+              sizeof(struct iphdr) - sizeof(struct udphdr);
         // GTPv1
         mtu -= sizeof(struct gtpv1_hdr);
     }
-    else {
+    else
+    {
         mtu = dst_mtu(&rt->dst);
     }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 8) || defined(RHEL8)
-       rt->dst.ops->update_pmtu(&rt->dst, NULL, skb, mtu, false);
+    rt->dst.ops->update_pmtu(&rt->dst, NULL, skb, mtu, false);
 #else
-       rt->dst.ops->update_pmtu(&rt->dst, NULL, skb, mtu);
+    rt->dst.ops->update_pmtu(&rt->dst, NULL, skb, mtu);
 #endif
 
     if (!skb_is_gso(skb) && (iph->frag_off & htons(IP_DF)) &&
-        mtu < ntohs(iph->tot_len)) {
+        mtu < ntohs(iph->tot_len))
+    {
         GTP5G_ERR(gtp_dev, "packet too big, fragmentation needed\n");
         memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
         icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
-              htonl(mtu));
+                  htonl(mtu));
         goto err_rt;
     }
 
@@ -164,8 +181,8 @@ err:
 }
 
 struct rtable *ip4_find_route_simple(struct sk_buff *skb,
-    struct sock *sk, struct net_device *gtp_dev, 
-    __be32 saddr, __be32 daddr, struct flowi4 *fl4)
+                                     struct sock *sk, struct net_device *gtp_dev,
+                                     __be32 saddr, __be32 daddr, struct flowi4 *fl4)
 {
     struct rtable *rt;
 
@@ -177,15 +194,17 @@ struct rtable *ip4_find_route_simple(struct sk_buff *skb,
     fl4->flowi4_proto = sk->sk_protocol;
 
     rt = ip_route_output_key(dev_net(gtp_dev), fl4);
-    if (IS_ERR(rt)) {
+    if (IS_ERR(rt))
+    {
         GTP5G_ERR(gtp_dev, "no route from %#x to %#x\n", saddr, daddr);
         gtp_dev->stats.tx_carrier_errors++;
         goto err;
     }
 
-    if (rt->dst.dev == gtp_dev) {
-        GTP5G_ERR(gtp_dev, "Packet colllisions from %#x to %#x\n", 
-            saddr, daddr);
+    if (rt->dst.dev == gtp_dev)
+    {
+        GTP5G_ERR(gtp_dev, "Packet colllisions from %#x to %#x\n",
+                  saddr, daddr);
         gtp_dev->stats.collisions++;
         goto err_rt;
     }
@@ -200,7 +219,7 @@ err:
     return ERR_PTR(-ENOENT);
 }
 
-int ip_xmit(struct sk_buff *skb, struct sock *sk, struct net_device *gtp_dev) 
+int ip_xmit(struct sk_buff *skb, struct sock *sk, struct net_device *gtp_dev)
 {
     struct iphdr *iph = ip_hdr(skb);
     struct flowi4 fl4;
@@ -208,7 +227,8 @@ int ip_xmit(struct sk_buff *skb, struct sock *sk, struct net_device *gtp_dev)
     __be32 src;
 
     rt = ip4_find_route_simple(skb, sk, gtp_dev, 0, iph->daddr, &fl4);
-    if (IS_ERR(rt)) {
+    if (IS_ERR(rt))
+    {
         GTP5G_ERR(gtp_dev, "Failed to find route\n");
         return -EBADMSG;
     }
@@ -219,13 +239,15 @@ int ip_xmit(struct sk_buff *skb, struct sock *sk, struct net_device *gtp_dev)
         Support multiple IP address configured on outgoing interface.
      */
     src = inet_select_addr(rt->dst.dev,
-                    rt_nexthop(rt, iph->daddr),
-                    RT_SCOPE_UNIVERSE);
-    if (src != 0) {
+                           rt_nexthop(rt, iph->daddr),
+                           RT_SCOPE_UNIVERSE);
+    if (src != 0)
+    {
         iph->saddr = src;
     }
 
-    if (ip_local_out(dev_net(gtp_dev), sk, skb) < 0) {
+    if (ip_local_out(dev_net(gtp_dev), sk, skb) < 0)
+    {
         GTP5G_ERR(gtp_dev, "Failed to send skb to ip layer\n");
         return -1;
     }
@@ -233,7 +255,7 @@ int ip_xmit(struct sk_buff *skb, struct sock *sk, struct net_device *gtp_dev)
 }
 
 void gtp5g_fwd_emark_skb_ipv4(struct sk_buff *skb,
-    struct net_device *dev, struct gtp5g_emark_pktinfo *epkt_info) 
+                              struct net_device *dev, struct gtp5g_emark_pktinfo *epkt_info)
 {
     struct rtable *rt;
     struct flowi4 fl4;
@@ -250,50 +272,51 @@ void gtp5g_fwd_emark_skb_ipv4(struct sk_buff *skb,
     gtp1->type = GTPV1_MSG_TYPE_EMARK;
     gtp1->tid = epkt_info->teid;
 
-    rt = ip4_find_route_simple(skb, epkt_info->sk, dev, 
-        epkt_info->role_addr /* Src Addr */ ,
-        epkt_info->peer_addr /* Dst Addr*/, 
-        &fl4);
-    if (IS_ERR(rt)) {
+    rt = ip4_find_route_simple(skb, epkt_info->sk, dev,
+                               epkt_info->role_addr /* Src Addr */,
+                               epkt_info->peer_addr /* Dst Addr*/,
+                               &fl4);
+    if (IS_ERR(rt))
+    {
         GTP5G_ERR(dev, "Failed to send GTP-U end-marker due to routing\n");
         dev_kfree_skb(skb);
         return;
     }
 
-    udp_tunnel_xmit_skb(rt, 
-        epkt_info->sk, 
-        skb,
-        fl4.saddr, 
-        fl4.daddr,
-        0,
-        ip4_dst_hoplimit(&rt->dst),
-        0,
-        epkt_info->gtph_port, 
-        epkt_info->gtph_port,
-        true, 
-        true);
+    udp_tunnel_xmit_skb(rt,
+                        epkt_info->sk,
+                        skb,
+                        fl4.saddr,
+                        fl4.daddr,
+                        0,
+                        ip4_dst_hoplimit(&rt->dst),
+                        0,
+                        epkt_info->gtph_port,
+                        epkt_info->gtph_port,
+                        true,
+                        true);
 }
 
 void gtp5g_xmit_skb_ipv4(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
 {
-    udp_tunnel_xmit_skb(pktinfo->rt, 
-        pktinfo->sk,
-        skb,
-        pktinfo->fl4.saddr,
-        pktinfo->fl4.daddr,
-        pktinfo->iph->tos,
-        ip4_dst_hoplimit(&pktinfo->rt->dst),
-        0,
-        pktinfo->gtph_port, 
-        pktinfo->gtph_port,
-        true, 
-        true);
+    udp_tunnel_xmit_skb(pktinfo->rt,
+                        pktinfo->sk,
+                        skb,
+                        pktinfo->fl4.saddr,
+                        pktinfo->fl4.daddr,
+                        pktinfo->iph->tos,
+                        ip4_dst_hoplimit(&pktinfo->rt->dst),
+                        0,
+                        pktinfo->gtph_port,
+                        pktinfo->gtph_port,
+                        true,
+                        true);
 }
 
 inline void gtp5g_set_pktinfo_ipv4(struct gtp5g_pktinfo *pktinfo,
-    struct sock *sk, struct iphdr *iph, struct outer_header_creation *hdr_creation,
-    u8 qfi, u16 seq_number, struct rtable *rt, struct flowi4 *fl4,
-    struct net_device *dev)
+                                   struct sock *sk, struct iphdr *iph, struct outer_header_creation *hdr_creation,
+                                   u8 qfi, u16 seq_number, struct rtable *rt, struct flowi4 *fl4,
+                                   struct net_device *dev)
 {
     pktinfo->sk = sk;
     pktinfo->iph = iph;
@@ -315,32 +338,30 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     u8 next_ehdr_type = 0;
     __be32 inner_src_ip, inner_dst_ip;
     u8 qfi_to_mask;
-    int gtp_header_len;
     int ext_flag = 0;
     int opt_flag = 0;
     int seq_flag = get_seq_enable();
     char src_ip_str[INET_ADDRSTRLEN];
     char dst_ip_str[INET_ADDRSTRLEN];
 
-    gtp_header_len = sizeof(struct gtpv1_hdr) + sizeof(gtpv1_hdr_opt_t) + sizeof(ext_pdu_sess_ctr_t);
 
-    extract_inner_ip_header(skb, &inner_src_ip, &inner_dst_ip, gtp_header_len);
+    extract_inner_ip_header(skb, &inner_src_ip, &inner_dst_ip);
     convert_ip_to_string(inner_src_ip, src_ip_str);
     convert_ip_to_string(inner_dst_ip, dst_ip_str);
 
     qfi_to_mask = determine_qfi(src_ip_str, dst_ip_str);
-    GTP5G_TRC(NULL, "SKBLen(%u) GTP-U V1(%zu) Opt(%zu) DL_PDU(%zu)\n", 
-        payload_len, sizeof(*gtp1), sizeof(*gtp1opt), sizeof(*dl_pdu_sess));
+    GTP5G_TRC(NULL, "SKBLen(%u) GTP-U V1(%zu) Opt(%zu) DL_PDU(%zu)\n",
+              payload_len, sizeof(*gtp1), sizeof(*gtp1opt), sizeof(*dl_pdu_sess));
 
     pktinfo->gtph_port = pktinfo->hdr_creation->port;
 
-    
     /* Suppport for extension header, sequence number and N-PDU.
      * Update the length field if any of them is available.
      */
-    
-    if (qfi_to_mask >= 0) {
-        ext_flag = 1; 
+
+    if (qfi_to_mask >= 0)
+    {
+        ext_flag = 1;
 
         /* Push PDU Session container information */
         dl_pdu_sess = skb_push(skb, sizeof(*dl_pdu_sess));
@@ -348,19 +369,21 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
         dl_pdu_sess->length = 1;
         dl_pdu_sess->pdu_sess_ctr.type_spare = 0; /* For DL */
         dl_pdu_sess->pdu_sess_ctr.u.dl.ppp_rqi_qfi = qfi_to_mask;
-        //TODO: PPI
+        // TODO: PPI
         dl_pdu_sess->next_ehdr_type = 0; /* No more extension Header */
-        
+
         opt_flag = 1;
         next_ehdr_type = 0x85; /* PDU Session Container */
     }
 
-    if (seq_flag){
+    if (seq_flag)
+    {
         opt_flag = 1;
         seq_number = htons(pktinfo->seq_number);
     }
 
-    if (opt_flag) {
+    if (opt_flag)
+    {
         /* Push optional header information */
         gtp1opt = skb_push(skb, sizeof(*gtp1opt));
         gtp1opt->seq_number = seq_number;
@@ -378,14 +401,14 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
      */
     gtp1 = skb_push(skb, sizeof(*gtp1));
     gtp1->flags = GTPV1; /* v1, GTP-non-prime. */
-    if (ext_flag) 
-        gtp1->flags |= GTPV1_HDR_FLG_EXTHDR; /* v1, Extension header enabled */ 
+    if (ext_flag)
+        gtp1->flags |= GTPV1_HDR_FLG_EXTHDR; /* v1, Extension header enabled */
     if (seq_flag)
         gtp1->flags |= GTPV1_HDR_FLG_SEQ;
     gtp1->type = GTPV1_MSG_TYPE_TPDU;
     gtp1->tid = pktinfo->hdr_creation->teid;
-    gtp1->length = htons(payload_len);       /* Excluded the header length of gtpv1 */
+    gtp1->length = htons(payload_len); /* Excluded the header length of gtpv1 */
 
-    GTP5G_TRC(NULL, "QER Found GTP-U Flg(%u) GTPU-L(%u) SkbLen(%u)\n", 
-        gtp1->flags, ntohs(gtp1->length), skb->len);
+    GTP5G_TRC(NULL, "QER Found GTP-U Flg(%u) GTPU-L(%u) SkbLen(%u)\n",
+              gtp1->flags, ntohs(gtp1->length), skb->len);
 }
