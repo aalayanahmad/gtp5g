@@ -18,10 +18,10 @@
 #include "log.h"
 
 
-void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip) {
+void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip, int other_headers_length) {
     struct iphdr *iph;
     
-    iph = (struct iphdr *)(skb->data);
+    iph = (struct iphdr *)(skb->data + other_headers_length);
     
     *inner_src_ip = iph->saddr;
     *inner_dst_ip = iph->daddr;
@@ -315,13 +315,16 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     u8 next_ehdr_type = 0;
     __be32 inner_src_ip, inner_dst_ip;
     u8 qfi_to_mask;
+    int gtp_header_len;
     int ext_flag = 0;
     int opt_flag = 0;
     int seq_flag = get_seq_enable();
     char src_ip_str[INET_ADDRSTRLEN];
     char dst_ip_str[INET_ADDRSTRLEN];
 
-    extract_inner_ip_header(skb, &inner_src_ip, &inner_dst_ip);
+    gtp_header_len = sizeof(struct gtpv1_hdr) + sizeof(gtpv1_hdr_opt_t) + sizeof(ext_pdu_sess_ctr_t);
+
+    extract_inner_ip_header(skb, &inner_src_ip, &inner_dst_ip, gtp_header_len);
     convert_ip_to_string(inner_src_ip, src_ip_str);
     convert_ip_to_string(inner_dst_ip, dst_ip_str);
 
