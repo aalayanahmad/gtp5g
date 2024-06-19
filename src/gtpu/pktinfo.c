@@ -32,12 +32,12 @@ return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
 }
 
 void convert_ip_to_string(__be32 ip, char *ip_str) {
-    unsigned char octet1 = ip & 0xFF;
-    unsigned char octet2 = (ip >> 8) & 0xFF;
-    unsigned char octet3 = (ip >> 16) & 0xFF;
-    unsigned char octet4 = (ip >> 24) & 0xFF;
+    unsigned char octet1 = (ip >> 24) & 0xFF;
+    unsigned char octet2 = (ip >> 16) & 0xFF;
+    unsigned char octet3 = (ip >> 8) & 0xFF;
+    unsigned char octet4 = ip & 0xFF;
 
-    snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet4, octet3, octet2, octet1);
+    snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet1, octet2, octet3, octet4);
 }
 
 u8 determine_qfi(const char *src_ip, const char *dst_ip) {
@@ -314,7 +314,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     u16 seq_number = 0;
     u8 next_ehdr_type = 0;
     __be32 inner_src_ip, inner_dst_ip;
-    u8 qfi_to_mask = 0;
+    u8 qfi_to_mask = 5;
     int ext_flag = 0;
     int opt_flag = 0;
     int seq_flag = get_seq_enable();
