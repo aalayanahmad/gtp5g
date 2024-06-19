@@ -6,6 +6,10 @@
 #include <net/icmp.h>
 #include <net/udp_tunnel.h>
 #include <net/route.h>
+#include <linux/string.h>
+#include <linux/inet.h>
+#include <linux/in.h>
+#include <linux/types.h>
 
 #include "gtp.h"
 #include "far.h"
@@ -13,6 +17,40 @@
 #include "pktinfo.h"
 #include "log.h"
 
+
+void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip) {
+    struct iphdr *iph;
+    unsigned char *ip_header_start;
+    
+    iph = (struct iphdr *)ip_header_start;
+    
+    *inner_src_ip = iph->saddr;
+    *inner_dst_ip = iph->daddr;
+}
+
+bool downlink(const char *ip) { 
+return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
+}
+
+void convert_ip_to_string(__be32 ip, char *ip_str) {
+    unsigned char octet1 = ip & 0xFF;
+    unsigned char octet2 = (ip >> 8) & 0xFF;
+    unsigned char octet3 = (ip >> 16) & 0xFF;
+    unsigned char octet4 = (ip >> 24) & 0xFF;
+
+    snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet4, octet3, octet2, octet1);
+}
+
+u8 determine_qfi(const char *src_ip, const char *dst_ip) {
+    if ((strcmp(src_ip, "10.100.200.2") == 0) && (downlink(dst_ip))) {
+        return 1;
+    } else if ((strcmp(src_ip, "10.100.200.3") == 0) && (downlink(dst_ip))) {
+        return 2;
+    } else {
+        return 0;
+    }
+}
+ 
 u64 network_and_transport_header_len(struct sk_buff *skb) {
     u64 hdrlen;
     struct iphdr *iph;
@@ -276,19 +314,29 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     ext_pdu_sess_ctr_t *dl_pdu_sess;
     u16 seq_number = 0;
     u8 next_ehdr_type = 0;
-
+    __be32 inner_src_ip, inner_dst_ip;
+    u8 qfi_to_mask = 0;
     int ext_flag = 0;
     int opt_flag = 0;
     int seq_flag = get_seq_enable();
+    char src_ip_str[INET_ADDRSTRLEN];
+    char dst_ip_str[INET_ADDRSTRLEN];
 
+    extract_inner_ip_header(skb, &inner_src_ip, &inner_dst_ip);
+    convert_ip_to_string(inner_src_ip, src_ip_str);
+    convert_ip_to_string(inner_dst_ip, dst_ip_str);
+
+    qfi_to_mask = determine_qfi(src_ip_str, dst_ip_str);
     GTP5G_TRC(NULL, "SKBLen(%u) GTP-U V1(%zu) Opt(%zu) DL_PDU(%zu)\n", 
         payload_len, sizeof(*gtp1), sizeof(*gtp1opt), sizeof(*dl_pdu_sess));
 
     pktinfo->gtph_port = pktinfo->hdr_creation->port;
 
+    
     /* Suppport for extension header, sequence number and N-PDU.
      * Update the length field if any of them is available.
      */
+    
     if (pktinfo->qfi > 0) {
         ext_flag = 1; 
 
@@ -297,7 +345,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
         /* Multiple of 4 (TODO include PPI) */
         dl_pdu_sess->length = 1;
         dl_pdu_sess->pdu_sess_ctr.type_spare = 0; /* For DL */
-        dl_pdu_sess->pdu_sess_ctr.u.dl.ppp_rqi_qfi = pktinfo->qfi;
+        dl_pdu_sess->pdu_sess_ctr.u.dl.ppp_rqi_qfi = qfi_to_mask;
         //TODO: PPI
         dl_pdu_sess->next_ehdr_type = 0; /* No more extension Header */
         
