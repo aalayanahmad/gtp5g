@@ -31,7 +31,7 @@ bool downlink(const char *ip)
 {
     return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
 }
-
+//FUCKKK
 void convert_ip_to_string(__be32 ip, char *ip_str)
 {
     unsigned char octet4 = (ip >> 24) & 0xFF;
