@@ -20,9 +20,8 @@
 
 void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip) {
     struct iphdr *iph;
-    unsigned char *ip_header_start;
     
-    iph = (struct iphdr *)ip_header_start;
+    iph = (struct iphdr *)skb->data;
     
     *inner_src_ip = iph->saddr;
     *inner_dst_ip = iph->daddr;
