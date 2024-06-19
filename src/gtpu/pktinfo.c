@@ -19,11 +19,9 @@
 
 
 void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip) {
-    struct ethhdr *eth;
     struct iphdr *iph;
     
-    eth = eth_hdr(skb); // Assuming eth_hdr() is a function to get Ethernet header
-    iph = (struct iphdr *)(skb->data + ETH_HLEN); // Skip Ethernet header
+    iph = (struct iphdr *)(skb->data);
     
     *inner_src_ip = iph->saddr;
     *inner_dst_ip = iph->daddr;
