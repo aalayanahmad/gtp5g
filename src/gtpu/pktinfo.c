@@ -48,7 +48,7 @@ u8 determine_qfi(const char *src_ip, const char *dst_ip) {
     } else if ((strcmp(src_ip, "10.100.200.3") == 0) && (downlink(dst_ip))) {
         return 2;
     } else {
-        return 5;
+        return 0;
     }
 }
  
