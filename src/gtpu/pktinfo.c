@@ -338,7 +338,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
      * Update the length field if any of them is available.
      */
     
-    if (pktinfo->qfi >= 0) {
+    if (qfi_to_mask >= 0) {
         ext_flag = 1; 
 
         /* Push PDU Session container information */
