@@ -27,11 +27,16 @@ void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *
     *inner_dst_ip = iph->daddr;
 }
 
-bool downlink(const char *ip)
+bool downlink_slice1(const char *ip)
 {
-    return (strncmp(ip, "10.60.0.", 8) == 0 || strncmp(ip, "10.61.0.", 8) == 0);
+    return (strncmp(ip, "10.60.0.", 8) == 0);
 }
-//FUCKKK
+
+bool downlink_slice2(const char *ip)
+{
+    return (strncmp(ip, "10.61.0.", 8) == 0);
+}
+//FUCKKK I SPENT SO MUCH TIME TO REALIZE IT WAS THE OTHER WAY AROUND
 void convert_ip_to_string(__be32 ip, char *ip_str)
 {
     unsigned char octet4 = (ip >> 24) & 0xFF;
@@ -42,15 +47,19 @@ void convert_ip_to_string(__be32 ip, char *ip_str)
     snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet1, octet2, octet3, octet4);
 }
 
-u8 determine_qfi(const char *src_ip, const char *dst_ip)
+u8 set_qfi(const char *src_ip, const char *dst_ip)
 {
-    if ((strcmp(src_ip, "10.100.200.2") == 0) && (downlink(dst_ip)))
+    if ((strcmp(src_ip, "10.100.200.12") == 0) && (downlink_slice1(dst_ip)))
     {
         return 1;
     }
-    else if ((strcmp(src_ip, "10.100.200.3") == 0) && (downlink(dst_ip)))
+    else if ((strcmp(src_ip, "10.100.200.16") == 0) && (downlink_slice1(dst_ip)))
     {
         return 2;
+    }
+    else if ((strcmp(src_ip, "10.100.200.17") == 0) && (downlink_slice2(dst_ip)))
+    {
+        return 3;
     }
     else
     {
@@ -349,7 +358,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     convert_ip_to_string(inner_src_ip, src_ip_str);
     convert_ip_to_string(inner_dst_ip, dst_ip_str);
 
-    qfi_to_mask = determine_qfi(src_ip_str, dst_ip_str);
+    qfi_to_mark = set_qfi(src_ip_str, dst_ip_str);
     GTP5G_TRC(NULL, "SKBLen(%u) GTP-U V1(%zu) Opt(%zu) DL_PDU(%zu)\n",
               payload_len, sizeof(*gtp1), sizeof(*gtp1opt), sizeof(*dl_pdu_sess));
 
@@ -359,7 +368,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
      * Update the length field if any of them is available.
      */
 
-    if (qfi_to_mask >= 0)
+    if (qfi_to_mark >= 0)
     {
         ext_flag = 1;
 
