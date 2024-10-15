@@ -17,6 +17,12 @@
 #include "qer.h"
 #include "urr.h"
 #include "report.h"
+#include <map>
+#include <cstdint>
+#include <string>
+#include <chrono>
+#include <iostream>
+#include <optional> // For std::optional
 
 #include "genl.h"
 #include "genl_report.h"
@@ -34,6 +40,23 @@ enum msg_type {
     TYPE_BAR_INFO,
 };
 
+//I added
+#define OUTER_HEADERS_LENGTH 44 
+#define TO_REACH_DELAY_VALUE 84
+
+std::map<std::pair<std::string, std::string>, uint32_t> uplink_thresholds = {
+    {{"10.100.200.12"}, 100},
+    {{"10.100.200.16"}, 200}
+};
+
+std::map<std::pair<std::string, std::string>, uint32_t> uplink_waiting_time = {
+    {{"10.100.200.12"}, 10},
+    {{"10.100.200.16"}, 20}
+};
+
+std::map<std::string, std::chrono::steady_clock::time_point> packet_arrival_times;
+
+//
 static void gtp5g_encap_disable_locked(struct sock *);
 static int gtp5g_encap_recv(struct sock *, struct sk_buff *);
 static int gtp1u_udp_encap_recv(struct gtp5g_dev *, struct sk_buff *);
@@ -741,7 +764,41 @@ static int gtp5g_rx(struct pdr *pdr, struct sk_buff *skb,
 out:
     return rt;
 }
+//I added
+void convert_ip_to_string(__be32 ip, char *ip_str)
+{
+    unsigned char octet4 = (ip >> 24) & 0xFF;
+    unsigned char octet3 = (ip >> 16) & 0xFF;
+    unsigned char octet2 = (ip >> 8) & 0xFF;
+    unsigned char octet1 = ip & 0xFF;
 
+    snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet1, octet2, octet3, octet4);
+}
+bool uplink_slice1(const char *ip)
+{
+    return (strncmp(ip, "10.60.0.", 8) == 0);
+}
+
+bool uplink_slice2(const char *ip)
+{
+    return (strncmp(ip, "10.61.0.", 8) == 0);
+}
+
+bool to_be_monitored(const char *src_ip, const char *dst_ip)
+{   
+    bool service1_slice1 = (strcmp(dst_ip, "10.100.200.12") == 0) && (uplink_slice1(src_ip));
+    bool service2_slice1 = (strcmp(dst_ip, "10.100.200.16") == 0) && (uplink_slice1(src_ip));
+    if (service1_slice1 || service2_slice1)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+//method i am INTERESTED in
 static int gtp5g_fwd_skb_encap(struct sk_buff *skb, struct net_device *dev,
     unsigned int hdrlen, struct pdr *pdr, struct far *far)
 {
@@ -758,6 +815,72 @@ static int gtp5g_fwd_skb_encap(struct sk_buff *skb, struct net_device *dev,
     TrafficPolicer* tp = NULL;
     Color color = Green;
     struct qer __rcu *qer_with_rate = NULL;
+
+    //I ADDED
+     __be32 inner_src_ip, inner_dst_ip;
+    char src_ip_str[INET_ADDRSTRLEN];
+    char dst_ip_str[INET_ADDRSTRLEN];
+    uint32_t appended_integer;
+    uint32_t ul_delay;
+    uint32_t ul_delay_threshold;
+    uint32_t waiting_time_threshold;
+    bool violate_threshold;
+    bool passed_waiting_time;
+
+    //i need to get inside the packet to the inner ip header DONE
+    struct iphdr *inner_iph = (struct iphdr *)(skb->data + OUTER_HEADERS_LEN);
+    inner_src_ip = inner_iph->saddr;  // inner source IP
+    inner_dst_ip = inner_iph->daddr;  // inner destination IP
+    convert_ip_to_string(inner_src_ip, src_ip_str);
+    convert_ip_to_string(inner_dst_ip, dst_ip_str);
+
+    //if the packet is to be monitored
+    if (to_be_monitored(src_ip_str,dst_ip_str)){
+
+
+        
+        if(packet_arrival_times[src_ip + std::string("+") + dst_ip] == NULL){
+            //add arrival time to map
+            packet_arrival_times[src_ip + std::string("+") + dst_ip] = std::chrono::steady_clock::now();
+            //i need to read the delay and i need to save it
+            memcpy(&appended_integer, skb->data + TO_REACH_DELAY_VALUE, sizeof(uint32_t));
+            ul_delay = ntohl(appended_integer);
+            //if it exceeds the threshold for the waiting time and the timer has been 0.1ms i need to report
+            //create a session report ONLY everything else was already created
+            ul_delay_threshold = uplink_threshold[{dst_ip_str}];    
+            violate_threshold = ul_delay > ul_delay_threshold;
+            if (violate_threshold) {
+                //store the value
+            }
+        }
+        else{
+            //i need to read the delay and i need to save it
+            memcpy(&appended_integer, skb->data + TO_REACH_DELAY_VALUE, sizeof(uint32_t));
+            ul_delay = ntohl(appended_integer);
+            //if it exceeds the threshold for the waiting time and the timer has been 0.1ms i need to report
+            //create a session report ONLY everything else was already created
+            ul_delay_threshold = uplink_threshold[{dst_ip_str}]; 
+            waiting_time_threshold = uplink_waiting_time[{dst_ip_str}]; 
+
+            auto latest_time = packet_arrival_times[src_ip + std::string("+") + dst_ip];
+            auto current_time = std::chrono::steady_clock::now();
+            violate_threshold = ul_delay > ul_delay_threshold; 
+            passed_waiting_time = (current_time - latest_time) > waiting_time_threshold;
+            if (violate_threshold && passed_waiting_time) {
+                //store the value
+            }
+        }
+    //somehow send every 0.1ms...
+    
+    
+    }
+    
+    
+    
+    
+    
+    
+    
     
     if (gtp1->type == GTPV1_MSG_TYPE_TPDU)
         volume_mbqe = ip4_rm_header(skb, hdrlen);
@@ -901,7 +1024,7 @@ static int gtp5g_fwd_skb_ipv4(struct sk_buff *skb,
     TrafficPolicer* tp = NULL;
     Color color = Green;
     struct qer __rcu *qer_with_rate = NULL;
-    
+
     if (!far) {
         GTP5G_ERR(dev, "Unknown RAN address\n");
         goto err;
@@ -953,6 +1076,7 @@ static int gtp5g_fwd_skb_ipv4(struct sk_buff *skb,
     } else {
         volume = volume_mbqe;
     }
+    
 
     gtp5g_push_header(skb, pktinfo);
 

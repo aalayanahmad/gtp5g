@@ -40,5 +40,8 @@ extern struct sock *gtp5g_encap_enable(int, int, struct gtp5g_dev *);
 extern void gtp5g_encap_disable(struct sock *);
 extern int gtp5g_handle_skb_ipv4(struct sk_buff *, struct net_device *,
         struct gtp5g_pktinfo *);
-
+void convert_ip_to_string(__be32 ip, char *ip_str);
+bool uplink_slice1(const char *ip);
+bool uplink_slice2(const char *ip);
+bool to_be_monitored(const char *src_ip, const char *dst_ip);
 #endif // __ENCAP_H__
