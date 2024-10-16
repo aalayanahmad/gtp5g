@@ -346,7 +346,7 @@ void gtp5g_push_header(struct sk_buff *skb, struct gtp5g_pktinfo *pktinfo)
     u16 seq_number = 0;
     u8 next_ehdr_type = 0;
     __be32 inner_src_ip, inner_dst_ip;
-    u8 qfi_to_mask;
+    u8 qfi_to_mark;
     int ext_flag = 0;
     int opt_flag = 0;
     int seq_flag = get_seq_enable();
