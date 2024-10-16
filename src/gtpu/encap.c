@@ -3,6 +3,14 @@
 #include <linux/rculist.h>
 #include <linux/udp.h>
 #include <linux/gtp.h>
+#include <linux/netlink.h>
+#include <net/sock.h>
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+#include <stdio.h>
+#include <stdint.h> // For uint32_t
+#include <netinet/in.h> // For INET_ADDRSTRLEN
 
 #include <net/ip.h>
 #include <net/udp.h>
@@ -41,8 +49,19 @@ enum msg_type {
 };
 
 //I added
-#define OUTER_HEADERS_LENGTH 44 
-#define TO_REACH_DELAY_VALUE 84
+struct monitoring_data {
+    uint8_t qfi_value;
+    uint32_t monitoring_measurement;
+    struct timespec64 started_at;
+    struct timespec64 time_stamp;
+};
+
+//I added
+#define TO_REACH_INNER_IP_PACKET 44 //offest to reach the inner ip source and destination 
+#define TO_REACH_DELAY_VALUE 84 //offest to reach the delay value to be reported
+#define NETLINK_GTP5G 31
+
+static struct sock *nl_sk = NULL;
 
 std::map<std::pair<std::string, std::string>, uint32_t> uplink_thresholds = {
     {{"10.100.200.12"}, 100},
@@ -764,9 +783,62 @@ static int gtp5g_rx(struct pdr *pdr, struct sk_buff *skb,
 out:
     return rt;
 }
+
 //I added
-void convert_ip_to_string(__be32 ip, char *ip_str)
-{
+int gtp5g_monitoring_init(void) {
+    struct netlink_kernel_cfg cfg = {
+        .input = NULL,  // Set an input handler if needed, or leave NULL
+    };
+
+    // Create Netlink socket for communication with user space
+    nl_sk = netlink_kernel_create(&init_net, NETLINK_GTP5G, &cfg);
+    if (!nl_sk) {
+        printk(KERN_ERR "Error creating Netlink socket for monitoring.\n");
+        return -ENOMEM;
+    }
+
+    printk(KERN_INFO "Netlink socket for monitoring created successfully.\n");
+    return 0;
+}
+
+//I added
+void gtp5g_monitoring_exit(void) {
+    if (nl_sk) {
+        netlink_kernel_release(nl_sk);
+        nl_sk = NULL;
+        printk(KERN_INFO "Netlink socket for monitoring released.\n");
+    }
+}
+
+
+//I added
+void send_monitoring_data_to_userspace(struct monitoring_data *data) {
+    struct sk_buff *skb_out;             // Netlink message buffer
+    struct nlmsghdr *nlh;                // Netlink message header
+    int msg_size = sizeof(*data);        // Size of the data to send
+    int res;                             // Result of the send operation
+
+    // Allocate new Netlink message buffer
+    skb_out = nlmsg_new(msg_size, 0);
+    if (!skb_out) {
+        printk(KERN_ERR "Failed to allocate new skb\n");
+        return;
+    }
+
+    // Attach the data to the Netlink message header
+    nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, msg_size, 0);
+    memcpy(nlmsg_data(nlh), data, msg_size);  // Copy the data into the message
+
+    // Send the message to user space
+    res = nlmsg_unicast(nl_sk, skb_out, 0);  // 0 here refers to the user space process PID (change if necessary)
+    if (res < 0) {
+        printk(KERN_INFO "Error while sending data to user space\n");
+    }
+}
+
+
+//I added
+void convert_ip_to_string(uint32_t ip, char *ip_str) {
     unsigned char octet4 = (ip >> 24) & 0xFF;
     unsigned char octet3 = (ip >> 16) & 0xFF;
     unsigned char octet2 = (ip >> 8) & 0xFF;
@@ -774,20 +846,11 @@ void convert_ip_to_string(__be32 ip, char *ip_str)
 
     snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u", octet1, octet2, octet3, octet4);
 }
-bool uplink_slice1(const char *ip)
-{
-    return (strncmp(ip, "10.60.0.", 8) == 0);
-}
-
-bool uplink_slice2(const char *ip)
-{
-    return (strncmp(ip, "10.61.0.", 8) == 0);
-}
 
 bool to_be_monitored(const char *src_ip, const char *dst_ip)
 {   
-    bool service1_slice1 = (strcmp(dst_ip, "10.100.200.12") == 0) && (uplink_slice1(src_ip));
-    bool service2_slice1 = (strcmp(dst_ip, "10.100.200.16") == 0) && (uplink_slice1(src_ip));
+    bool service1_slice1 = (strcmp(dst_ip, "10.100.200.12") == 0) && (strncmp(ip, "10.60.0.", 8) == 0);
+    bool service2_slice1 = (strcmp(dst_ip, "10.100.200.16") == 0) && (strncmp(ip, "10.60.0.", 8) == 0);
     if (service1_slice1 || service2_slice1)
     {
         return true;
@@ -817,60 +880,80 @@ static int gtp5g_fwd_skb_encap(struct sk_buff *skb, struct net_device *dev,
     struct qer __rcu *qer_with_rate = NULL;
 
     //I ADDED
-     __be32 inner_src_ip, inner_dst_ip;
+    struct iphdr *inner_iph;
+    __be32 inner_src_ip, inner_dst_ip;
     char src_ip_str[INET_ADDRSTRLEN];
     char dst_ip_str[INET_ADDRSTRLEN];
     uint32_t appended_integer;
     uint32_t ul_delay;
     uint32_t ul_delay_threshold;
     uint32_t waiting_time_threshold;
-    bool violate_threshold;
-    bool passed_waiting_time;
+    bool violate_threshold = false;
+    bool passed_waiting_time = false;
+    char key[INET_ADDRSTRLEN * 2]; 
 
-    //i need to get inside the packet to the inner ip header DONE
-    struct iphdr *inner_iph = (struct iphdr *)(skb->data + OUTER_HEADERS_LEN);
-    inner_src_ip = inner_iph->saddr;  // inner source IP
-    inner_dst_ip = inner_iph->daddr;  // inner destination IP
-    convert_ip_to_string(inner_src_ip, src_ip_str);
-    convert_ip_to_string(inner_dst_ip, dst_ip_str);
+    
+    inner_iph = (struct iphdr *)(skb->data + TO_REACH_INNER_IP_PACKET); //skipping to the inner ip packet
+    inner_src_ip = inner_iph->saddr;  //inner source ip
+    inner_dst_ip = inner_iph->daddr;  //inner destination ip
+    convert_ip_to_string(ntohl(inner_src_ip), src_ip_str);
+    convert_ip_to_string(ntohl(inner_dst_ip), dst_ip_str);
 
-    //if the packet is to be monitored
-    if (to_be_monitored(src_ip_str,dst_ip_str)){
+    // Check if the packet is to be monitored
+    if (to_be_monitored(src_ip_str, dst_ip_str)) {
+        snprintf(key, sizeof(key), "%s+%s", src_ip_str, dst_ip_str);
 
+        // Check if the arrival time for this src-dst pair is already stored
+        if (!hash_lookup(&packet_arrival_times, key)) {
+            // New packet - store arrival time
+            ktime_t current_time = ktime_get();
+            hash_add(packet_arrival_times, &current_time, key);  // Assume your hash_add function takes a ktime_t
 
-        
-        if(packet_arrival_times[src_ip + std::string("+") + dst_ip] == NULL){
-            //add arrival time to map
-            packet_arrival_times[src_ip + std::string("+") + dst_ip] = std::chrono::steady_clock::now();
-            //i need to read the delay and i need to save it
-            memcpy(&appended_integer, skb->data + TO_REACH_DELAY_VALUE, sizeof(uint32_t));
+            // Read the delay and save it
+            memcpy(&appended_integer, skb->data + sizeof(struct udphdr) + SOME_OFFSET, sizeof(uint32_t));
             ul_delay = ntohl(appended_integer);
-            //if it exceeds the threshold for the waiting time and the timer has been 0.1ms i need to report
-            //create a session report ONLY everything else was already created
-            ul_delay_threshold = uplink_threshold[{dst_ip_str}];    
-            violate_threshold = ul_delay > ul_delay_threshold;
-            if (violate_threshold) {
-                //store the value
+
+            // Check against thresholds
+            ul_delay_threshold = hash_lookup(&uplink_thresholds, dst_ip_str);
+            if (ul_delay > ul_delay_threshold) {
+                struct monitoring_data data = {
+                    .lSeid = some_lSeid_value,        // Fill this in
+                    .qfi_value = some_qfi_value,      // Fill this in
+                    .monitoring_measurement = some_measurement_value, // Fill this in
+                    .started_at = ktime_get(),
+                    .time_stamp = ktime_get(),
+                };
+                send_monitoring_data_to_userspace(&data);
             }
-        }
-        else{
-            //i need to read the delay and i need to save it
-            memcpy(&appended_integer, skb->data + TO_REACH_DELAY_VALUE, sizeof(uint32_t));
-            ul_delay = ntohl(appended_integer);
-            //if it exceeds the threshold for the waiting time and the timer has been 0.1ms i need to report
-            //create a session report ONLY everything else was already created
-            ul_delay_threshold = uplink_threshold[{dst_ip_str}]; 
-            waiting_time_threshold = uplink_waiting_time[{dst_ip_str}]; 
+        } else {
+            // Existing packet - check delay and waiting time
+            ktime_t last_time = hash_lookup(&packet_arrival_times, key);
+            ktime_t current_time = ktime_get();
 
-            auto latest_time = packet_arrival_times[src_ip + std::string("+") + dst_ip];
-            auto current_time = std::chrono::steady_clock::now();
-            violate_threshold = ul_delay > ul_delay_threshold; 
-            passed_waiting_time = (current_time - latest_time) > waiting_time_threshold;
+            // Read the delay
+            memcpy(&appended_integer, skb->data + sizeof(struct udphdr) + SOME_OFFSET, sizeof(uint32_t));
+            ul_delay = ntohl(appended_integer);
+
+            // Retrieve thresholds
+            ul_delay_threshold = hash_lookup(&uplink_thresholds, dst_ip_str);
+            waiting_time_threshold = hash_lookup(&uplink_waiting_time, dst_ip_str);
+
+            // Calculate delay and waiting time checks
+            violate_threshold = (ul_delay > ul_delay_threshold);
+            passed_waiting_time = ktime_to_ms(ktime_sub(current_time, last_time)) > waiting_time_threshold;
+
             if (violate_threshold && passed_waiting_time) {
-                //store the value
+                struct monitoring_data data = {
+                    .lSeid = some_lSeid_value,        // Fill this in
+                    .qfi_value = some_qfi_value,      // Fill this in
+                    .monitoring_measurement = some_measurement_value, // Fill this in
+                    .started_at = ktime_get(),
+                    .time_stamp = ktime_get(),
+                };
+                send_monitoring_data_to_userspace(&data);
             }
         }
-    //somehow send every 0.1ms...
+    }
     
     
     }

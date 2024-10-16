@@ -19,6 +19,13 @@ static int __init gtp5g_init(void)
     // set hash initial value
     get_random_bytes(&gtp5g_h_initval, sizeof(gtp5g_h_initval));
 
+    //I added
+    err = gtp5g_monitoring_init();
+    if (err < 0) {
+        GTP5G_ERR(NULL, "Failed to initialize monitoring communication\n");
+        goto error_out;
+    }
+
     err = rtnl_link_register(&gtp5g_link_ops);
     if (err < 0) {
         GTP5G_ERR(NULL, "Failed to register rtnl\n");
@@ -50,12 +57,18 @@ unreg_genl_family:
     genl_unregister_family(&gtp5g_genl_family);
 unreg_rtnl_link:
     rtnl_link_unregister(&gtp5g_link_ops);
+//I added
+unreg_monitoring:
+    gtp5g_monitoring_exit(); 
 error_out:
     return err;
 }
 
 static void __exit gtp5g_fini(void)
 {
+    //I added
+    gtp5g_monitoring_exit();
+    
     genl_unregister_family(&gtp5g_genl_family);
     rtnl_link_unregister(&gtp5g_link_ops);
     unregister_pernet_subsys(&gtp5g_net_ops);

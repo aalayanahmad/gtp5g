@@ -353,3 +353,4 @@ void convert_urr_to_report(struct urr *urr, struct usage_report *report)
 
     urr->start_time = ktime_get_real();
 }
+
