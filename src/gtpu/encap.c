@@ -8,6 +8,9 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 
+
+#include <arpa/inet.h> // for INET_ADDRSTRLEN
+
 #include <stdio.h>
 #include <stdint.h> // For uint32_t
 #include <netinet/in.h> // For INET_ADDRSTRLEN
@@ -27,14 +30,16 @@
 #include "report.h"
 #include <map>
 #include <cstdint>
-#include <string>
 #include <chrono>
 #include <iostream>
 #include <optional> // For std::optional
 
 #include "genl.h"
 #include "genl_report.h"
-
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "log.h"
 #include "api_version.h"
 #include "pktinfo.h"
@@ -48,7 +53,32 @@ enum msg_type {
     TYPE_BAR_INFO,
 };
 
+
 //I added
+#define MAX_KEYS 400  //to store latest time a packet arrived
+#define MAX_ENTRIES_PREDEFINED 2      // predefined map entries
+#define TO_REACH_INNER_IP_PACKET 44 //offest to reach the inner ip source and destination 
+#define TO_REACH_DELAY_VALUE 96 //offest to reach the delay value to be reported
+#define NETLINK_GTP5G 31 //for sendign the data to the user space
+static struct sock *nl_sk = NULL;
+////////////////////////////////////////////////////////////////
+
+//I added
+typedef struct {
+    char* ip;         
+    time_t timestamp;
+} LastReportTime;
+
+union Value {
+    uint32_t uint32_value;
+    uint8_t uint8_value;
+};
+
+enum ValueType {
+    THRESHOLD,
+    WAITING_TIME,
+    QFI
+};
 struct monitoring_data {
     uint8_t qfi_value;
     uint32_t monitoring_measurement;
@@ -56,26 +86,83 @@ struct monitoring_data {
     struct timespec64 time_stamp;
 };
 
-//I added
-#define TO_REACH_INNER_IP_PACKET 44 //offest to reach the inner ip source and destination 
-#define TO_REACH_DELAY_VALUE 84 //offest to reach the delay value to be reported
-#define NETLINK_GTP5G 31
-
-static struct sock *nl_sk = NULL;
-
-std::map<std::pair<std::string, std::string>, uint32_t> uplink_thresholds = {
-    {{"10.100.200.12"}, 100},
-    {{"10.100.200.16"}, 200}
+struct uplink_info uplink_mappings[MAX_ENTRIES_PREDEFINED] = {
+    {"10.100.200.12", 100, 10, 1},
+    {"10.100.200.16", 200, 20, 2}
 };
 
-std::map<std::pair<std::string, std::string>, uint32_t> uplink_waiting_time = {
-    {{"10.100.200.12"}, 10},
-    {{"10.100.200.16"}, 20}
+struct uplink_info {
+    char dst_ip[MAX_IP_LENGTH];  // Destination IP address
+    uint32_t threshold;           // Uplink delay threshold
+    uint32_t waiting_time;        // Uplink waiting time threshold
+    uint8_t qfi;                  // QFI value
 };
+////////////////////////////////////////////////////////////////
 
-std::map<std::string, std::chrono::steady_clock::time_point> packet_arrival_times;
+// Function to find an index of an existing key or -1 if not found
+int find_key(ArrivalTime* arrival_times, int count, const char* ip) {
+    for (int i = 0; i < count; i++) {
+        if (strcmp(arrival_times[i].ip, ip) == 0) {
+            return i;  // Found the key
+        }
+    }
+    return -1;  // Key not found
+}
+// Function to add or update a key-value pair
+void add_or_update_key(LastReportTime* last_report_time, int* count, const char* ip) {
+    int index = find_key(last_report_time, *count, ip);
+    
+    if (index != -1) {
+        // Update the existing key
+        last_report_time[index].timestamp = time(NULL);  // Update to current time
+    } else {
+        // Add a new key-value pair
+        if (*count < MAX_KEYS) {
+            arrival_times[*count].ip = malloc(strlen(ip) + 1);  // Allocate memory for the IP address
+            if (arrival_times[*count].ip == NULL) {
+                fprintf(stderr, "Memory allocation failed!\n");
+                exit(1);
+            }
+            strcpy(arrival_times[*count].ip, ip);  // Copy the IP address
+            arrival_times[*count].timestamp = time(NULL);  // Set to current time
+            (*count)++;
+        } else {
+            printf("Error: Maximum number of keys reached!\n");
+        }
+    }
+}
+// Function to free allocated memory
+void free_memory(LastReportTime* last_report_time, int count) {
+    for (int i = 0; i < count; i++) {
+        free(last_report_time[i].ip);  // Free each allocated IP address
+    }
+}
 
-//
+
+// Function to look up the specified value by destination IP
+union Value lookup_uplink_value(const char* dst_ip, enum ValueType type) {
+    union Value result;  // Create an instance of the union
+    for (int i = 0; i < MAX_ENTRIES_PREDEFINED; i++) {
+        if (strcmp(uplink_mappings[i].dst_ip, dst_ip) == 0) {
+            switch (type) {
+                case THRESHOLD:
+                    result.uint32_value = uplink_mappings[i].threshold;
+                    return result;  // Return the result union
+                case WAITING_TIME:
+                    result.uint32_value = uplink_mappings[i].waiting_time;
+                    return result;  // Return the result union
+                case QFI:
+                    result.uint8_value = uplink_mappings[i].qfi;
+                    return result;  // Return the result union
+                default:
+                    return result; // Return default (uninitialized)
+            }
+        }
+    }
+    return result;  // Return default (uninitialized) if no match is found
+}
+
+
 static void gtp5g_encap_disable_locked(struct sock *);
 static int gtp5g_encap_recv(struct sock *, struct sk_buff *);
 static int gtp1u_udp_encap_recv(struct gtp5g_dev *, struct sk_buff *);
@@ -849,16 +936,10 @@ void convert_ip_to_string(uint32_t ip, char *ip_str) {
 
 bool to_be_monitored(const char *src_ip, const char *dst_ip)
 {   
-    bool service1_slice1 = (strcmp(dst_ip, "10.100.200.12") == 0) && (strncmp(ip, "10.60.0.", 8) == 0);
-    bool service2_slice1 = (strcmp(dst_ip, "10.100.200.16") == 0) && (strncmp(ip, "10.60.0.", 8) == 0);
-    if (service1_slice1 || service2_slice1)
-    {
-        return true;
-    }
-    else
-    {
-        return false;
-    }
+    bool service1_slice1 = (strcmp(dst_ip, "10.100.200.12") == 0) && (strncmp(src_ip, "10.60.0.", 8) == 0);
+    bool service2_slice1 = (strcmp(dst_ip, "10.100.200.16") == 0) && (strncmp(src_ip, "10.60.0.", 8) == 0);
+    return (service1_slice1 || service2_slice1);
+
 }
 
 //method i am INTERESTED in
@@ -887,6 +968,7 @@ static int gtp5g_fwd_skb_encap(struct sk_buff *skb, struct net_device *dev,
     uint32_t appended_integer;
     uint32_t ul_delay;
     uint32_t ul_delay_threshold;
+    uint8_t qfi;
     uint32_t waiting_time_threshold;
     bool violate_threshold = false;
     bool passed_waiting_time = false;
@@ -901,62 +983,28 @@ static int gtp5g_fwd_skb_encap(struct sk_buff *skb, struct net_device *dev,
 
     // Check if the packet is to be monitored
     if (to_be_monitored(src_ip_str, dst_ip_str)) {
-        snprintf(key, sizeof(key), "%s+%s", src_ip_str, dst_ip_str);
-
-        // Check if the arrival time for this src-dst pair is already stored
-        if (!hash_lookup(&packet_arrival_times, key)) {
-            // New packet - store arrival time
-            ktime_t current_time = ktime_get();
-            hash_add(packet_arrival_times, &current_time, key);  // Assume your hash_add function takes a ktime_t
-
-            // Read the delay and save it
-            memcpy(&appended_integer, skb->data + sizeof(struct udphdr) + SOME_OFFSET, sizeof(uint32_t));
-            ul_delay = ntohl(appended_integer);
-
+            // extract the delay
+            memcpy(&appended_integer, skb->data + TO_REACH_DELAY_VALUE, sizeof(uint32_t));
+            ul_delay = ntohl(appended_integer); //change it to int
             // Check against thresholds
-            ul_delay_threshold = hash_lookup(&uplink_thresholds, dst_ip_str);
+            ul_delay_threshold = lookup_uplink_value(dst_ip_str, THRESHOLD);
+            qfi = lookup_uplink_value(dst_ip_str, QFI);
+            waiting_time_threshold = lookup_uplink_value(dst_ip_str, WAITING_TIME);
             if (ul_delay > ul_delay_threshold) {
-                struct monitoring_data data = {
-                    .lSeid = some_lSeid_value,        // Fill this in
-                    .qfi_value = some_qfi_value,      // Fill this in
-                    .monitoring_measurement = some_measurement_value, // Fill this in
+                
+                struct monitoring_data data = {      
+                    .qfi_value = qfi,     
+                    .monitoring_measurement = ul_delay,
                     .started_at = ktime_get(),
                     .time_stamp = ktime_get(),
                 };
                 send_monitoring_data_to_userspace(&data);
             }
-        } else {
-            // Existing packet - check delay and waiting time
-            ktime_t last_time = hash_lookup(&packet_arrival_times, key);
-            ktime_t current_time = ktime_get();
-
-            // Read the delay
-            memcpy(&appended_integer, skb->data + sizeof(struct udphdr) + SOME_OFFSET, sizeof(uint32_t));
-            ul_delay = ntohl(appended_integer);
-
-            // Retrieve thresholds
-            ul_delay_threshold = hash_lookup(&uplink_thresholds, dst_ip_str);
-            waiting_time_threshold = hash_lookup(&uplink_waiting_time, dst_ip_str);
-
-            // Calculate delay and waiting time checks
-            violate_threshold = (ul_delay > ul_delay_threshold);
-            passed_waiting_time = ktime_to_ms(ktime_sub(current_time, last_time)) > waiting_time_threshold;
-
-            if (violate_threshold && passed_waiting_time) {
-                struct monitoring_data data = {
-                    .lSeid = some_lSeid_value,        // Fill this in
-                    .qfi_value = some_qfi_value,      // Fill this in
-                    .monitoring_measurement = some_measurement_value, // Fill this in
-                    .started_at = ktime_get(),
-                    .time_stamp = ktime_get(),
-                };
-                send_monitoring_data_to_userspace(&data);
-            }
-        }
+        } 
     }
     
     
-    }
+    
     
     
     

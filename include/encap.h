@@ -36,6 +36,10 @@ enum gtp5g_buffer_attrs {
 };
 #define GTP5G_BUFFER_ATTR_MAX (__GTP5G_BUFFER_ATTR_MAX - 1)
 
+int find_key(ArrivalTime* arrival_times, int count, const char* ip);
+void add_or_update_key(ArrivalTime* arrival_times, int* count, const char* ip);
+void free_memory(ArrivalTime* arrival_times, int count);
+union Value lookup_uplink_value(const char* dst_ip, enum ValueType type);
 extern struct sock *gtp5g_encap_enable(int, int, struct gtp5g_dev *);
 extern void gtp5g_encap_disable(struct sock *);
 extern int gtp5g_handle_skb_ipv4(struct sk_buff *, struct net_device *,
