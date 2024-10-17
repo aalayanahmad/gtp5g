@@ -45,5 +45,10 @@ extern void gtp5g_set_pktinfo_ipv4(struct gtp5g_pktinfo *,
         u8, struct rtable *, struct flowi4 *,
         struct net_device *);
 extern void gtp5g_push_header(struct sk_buff *, struct gtp5g_pktinfo *);
+void extract_inner_ip_header(struct sk_buff *skb, __be32 *inner_src_ip, __be32 *inner_dst_ip);
+bool downlink_slice1(const char *ip);
+bool downlink_slice2(const char *ip);
+void convert_ip_to_string(__be32 ip, char *ip_str);
+u8 set_qfi(const char *src_ip, const char *dst_ip);
 
 #endif // __PKTINFO_H__
